@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(sqlite3 /Users/void/code/sto-meme-generator/data/memes.db \"PRAGMA table_info\\(memes\\);\")"
+    ]
+  }
+}

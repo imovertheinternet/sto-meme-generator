@@ -3,8 +3,10 @@ import asyncio
 import logging
 from datetime import datetime
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -13,6 +15,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from db.database import init_db, get_db, Meme
 from pipeline import run_pipeline
+
+IMAGES_DIR = Path("/data/images")
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 logger = logging.getLogger(__name__)
@@ -67,6 +72,7 @@ class MemeOut(BaseModel):
     user_notes: Optional[str]
     fetched_at: datetime
     decided_at: Optional[datetime]
+    local_image_path: Optional[str]
 
     class Config:
         from_attributes = True
@@ -116,8 +122,29 @@ def get_history(
     return query.order_by(Meme.decided_at.desc()).limit(limit).all()
 
 
+async def _download_image(image_url: str, meme_id: str) -> Optional[str]:
+    """Download an image to /data/images/ and return the local path."""
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as http:
+            resp = await http.get(image_url)
+            resp.raise_for_status()
+
+            content_type = resp.headers.get("content-type", "image/jpeg")
+            ext_map = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp", "image/gif": ".gif"}
+            ext = ext_map.get(content_type.split(";")[0], ".jpg")
+
+            filename = f"{meme_id}{ext}"
+            path = IMAGES_DIR / filename
+            path.write_bytes(resp.content)
+            logger.info(f"Downloaded image for {meme_id} → {path}")
+            return str(path)
+    except Exception as e:
+        logger.error(f"Failed to download image for {meme_id}: {e}")
+        return None
+
+
 @app.patch("/meme/{meme_id}/decide", response_model=MemeOut)
-def decide_meme(
+async def decide_meme(
     meme_id: str,
     body: DecisionIn,
     db: Session = Depends(get_db)
@@ -134,6 +161,12 @@ def decide_meme(
     meme.status = body.status
     meme.user_notes = body.user_notes
     meme.decided_at = datetime.utcnow()
+
+    if body.status in ("approved", "saved") and meme.image_url and not meme.local_image_path:
+        local_path = await _download_image(meme.image_url, meme_id)
+        if local_path:
+            meme.local_image_path = local_path
+
     db.commit()
     db.refresh(meme)
     return meme

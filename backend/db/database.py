@@ -47,6 +47,7 @@ class Meme(Base):
     status = Column(String, default="pending")  # pending | approved | rejected | saved
     user_notes = Column(Text, nullable=True)
     decided_at = Column(DateTime, nullable=True)
+    local_image_path = Column(String, nullable=True)
 
     fetched_at = Column(DateTime, default=datetime.utcnow)
     created_at = Column(DateTime, nullable=True)  # original post date
@@ -64,6 +65,17 @@ class SeenID(Base):
 
 def init_db():
     Base.metadata.create_all(bind=engine)
+    print("*****init_db called")
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    columns = [c["name"] for c in inspector.get_columns("memes")]
+    if "local_image_path" not in columns:
+        with engine.begin() as conn:
+            print("Adding local_image_path column to memes table")
+            conn.execute(text("ALTER TABLE memes ADD COLUMN local_image_path TEXT"))
+    else:
+        print("*****local_image_path column already exists in memes table")
 
 
 def get_db():
