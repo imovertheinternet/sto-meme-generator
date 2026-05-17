@@ -20,7 +20,7 @@ the best ones in a review UI for you to approve, save, or pass on.
 
 ```bash
 git clone <this-repo>
-cd stickthison-meme-agent
+cd sto-meme-generator
 cp .env.example .env
 ```
 
@@ -82,15 +82,32 @@ a meme needs to reach your review queue. Default is 5.0 out of 10.
 - Raise to 6.0+ → fewer, higher-confidence items
 - Lower to 4.0 → more items, more noise
 
+The AI filter evaluates images for both **PVC patches** (bold, simple designs) and
+**UV-printed patches** (full-color, complex artwork). It also learns from your
+approval/rejection history — the last 26 decisions are fed back into the scoring
+prompt to calibrate to your taste.
+
 ---
 
 ## Review workflow
 
 | Button | Meaning |
 |---|---|
-| ✅ APPROVE | Green light — queue for design |
-| 🔖 SAVE | Interesting but not ready — review later |
+| ✅ APPROVE | Green light — queue for design. Image auto-downloads to `data/images/` |
+| 🔖 SAVE | Interesting but not ready — review later. Image also auto-downloads |
 | ❌ PASS | Not a fit — never shown again |
+
+You can change any decision later from the History view — click a meme and
+use the "Move to" buttons to reclassify it.
+
+---
+
+## Data & storage
+
+All persistent data lives in the `data/` directory (mounted as a Docker volume):
+
+- `data/memes.db` — SQLite database with all memes and decisions
+- `data/images/` — auto-downloaded images from approved/saved memes
 
 ---
 
@@ -101,15 +118,9 @@ a meme needs to reach your review queue. Default is 5.0 out of 10.
 docker compose up --build -d
 ```
 
-That's it. The only file you need to transfer is:
+Transfer these files:
 - Your `.env` file (keep this secret)
-- Optionally: the `meme-data` Docker volume if you want to preserve history
-
-To export your local DB first:
-```bash
-docker run --rm -v stickthison-meme-agent_meme-data:/data -v $(pwd):/backup \
-  ubuntu tar czf /backup/meme-data-backup.tar.gz /data
-```
+- The `data/` directory if you want to preserve history and downloaded images
 
 ---
 
@@ -118,13 +129,14 @@ docker run --rm -v stickthison-meme-agent_meme-data:/data -v $(pwd):/backup \
 ```
 Apify (Instagram/TikTok) ─┐
 Reddit public JSON        ─┼──► Dedup ──► Claude Vision ──► SQLite ──► FastAPI ──► React UI
-Manual (Telegram, Phase 2)─┘
+                           ┘
 ```
 
 ---
 
-## Phase 2 (planned)
+## Planned
 
-- Telegram bot for mobile bookmarking (share sheet → pipeline DB)
-- Firecrawl competitor catalog cross-reference
 - Approval pattern analysis to auto-tune scoring prompt
+- Bulk email approved memes with standardized template
+- Frontend migration to shadcn UI
+- Anthropic prompt caching for cost reduction

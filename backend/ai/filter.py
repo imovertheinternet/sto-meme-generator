@@ -99,7 +99,7 @@ def _build_preference_examples(limit: int = 26) -> str:
         db.close()
 
 
-async def filter_meme(post: dict) -> dict:
+async def filter_meme(post: dict, system_prompt: str = None) -> dict:
     """
     Sends a meme to Claude for brand-fit scoring.
     Returns the post dict augmented with ai_ fields.
@@ -157,12 +157,12 @@ async def filter_meme(post: dict) -> dict:
     )
 
     try:
-        system_with_prefs = SYSTEM_PROMPT + _build_preference_examples()
+        effective_prompt = system_prompt or (SYSTEM_PROMPT + _build_preference_examples())
 
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
-            system=system_with_prefs,
+            system=effective_prompt,
             messages=[{"role": "user", "content": user_message_content}],
         )
 
@@ -215,12 +215,13 @@ async def filter_batch(posts: list[dict]) -> list[dict]:
     """Filter a list of posts, returning only those that pass the threshold."""
     import asyncio
 
-    # Semaphore: max 5 concurrent Claude calls to avoid rate limit bursts
+    system_prompt = SYSTEM_PROMPT + _build_preference_examples()
+
     sem = asyncio.Semaphore(5)
 
     async def guarded_filter(post):
         async with sem:
-            return await filter_meme(post)
+            return await filter_meme(post, system_prompt=system_prompt)
 
     tasks = [guarded_filter(p) for p in posts]
     results = await asyncio.gather(*tasks)

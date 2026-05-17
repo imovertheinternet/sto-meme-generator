@@ -18,10 +18,15 @@ services:
       retries: 3
 
   frontend:
-    build: ./frontend
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
     container_name: sto-frontend
     restart: unless-stopped
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/index.html:/app/index.html
     ports:
-      - "3000:80"
+      - "3000:3000"
     depends_on:
       - backend
