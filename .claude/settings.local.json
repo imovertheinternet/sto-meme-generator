@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(sqlite3 /Users/void/code/sto-meme-generator/data/memes.db \"PRAGMA table_info\\(memes\\);\")"
+      "Bash(sqlite3 /Users/void/code/sto-meme-generator/data/memes.db \"PRAGMA table_info\\(memes\\);\")",
+      "Bash(curl -s http://localhost:8000/stats)",
+      "Bash(python3 -m json.tool)",
+      "Bash(curl -s -X POST http://localhost:8000/preferences/analyze)"
     ]
   }
 }

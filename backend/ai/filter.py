@@ -5,7 +5,7 @@ import os
 import anthropic
 import httpx
 from anthropic import Anthropic
-from db.database import Meme, SessionLocal
+from db.database import Meme, PreferenceRules, SessionLocal
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +94,144 @@ def _build_preference_examples(limit: int = 26) -> str:
         return "\n".join(lines)
     except Exception as e:
         logger.warning(f"Could not load preference examples: {e}")
+        return ""
+    finally:
+        db.close()
+
+
+PREFERENCE_ANALYSIS_PROMPT = """You are analyzing a content curator's decision history for StickThisOn,
+a company that sells PVC/UV-printed patches and stickers for the 2A/military/EDC community.
+
+Below is every meme the curator has approved, rejected, or saved, along with AI scores and any notes they left.
+
+Your job: distill their taste into 10-15 concise, actionable scoring rules. These rules will be injected
+into the scoring prompt so future memes are evaluated to match this curator's preferences.
+
+Focus on PATTERNS, not individual posts:
+- What humor styles do they consistently approve vs reject?
+- What score ranges correlate with their approvals?
+- Are there content types they always approve regardless of score?
+- Are there content types they always reject regardless of score?
+- Do their notes reveal preferences the scores don't capture?
+- What themes, formats, or aesthetics do they gravitate toward?
+
+Return ONLY a numbered list of rules, no preamble. Each rule should be one sentence.
+Example format:
+1. Prefer absurdist/dark humor over wholesome or motivational content.
+2. Reject memes that are just photos of existing patch collections.
+3. ...
+"""
+
+REGEN_THRESHOLD = 20  # regenerate rules after this many new decisions
+
+
+def _get_preference_rules() -> str:
+    """Return the latest distilled preference rules, or empty string if none exist."""
+    db = SessionLocal()
+    try:
+        latest = (
+            db.query(PreferenceRules)
+            .order_by(PreferenceRules.created_at.desc())
+            .first()
+        )
+        if not latest:
+            return ""
+        return (
+            "\n\nCURATOR PREFERENCE RULES — Distilled from their approval history. "
+            "Use these rules to calibrate your scoring:\n" + latest.rules_text
+        )
+    except Exception as e:
+        logger.warning(f"Could not load preference rules: {e}")
+        return ""
+    finally:
+        db.close()
+
+
+def _should_regenerate_rules() -> bool:
+    """Check if enough new decisions have been made to warrant regenerating rules."""
+    db = SessionLocal()
+    try:
+        total_decided = (
+            db.query(Meme)
+            .filter(Meme.status.in_(["approved", "rejected", "saved"]))
+            .count()
+        )
+        latest = (
+            db.query(PreferenceRules)
+            .order_by(PreferenceRules.created_at.desc())
+            .first()
+        )
+        last_count = latest.decisions_analyzed if latest else 0
+        return (total_decided - last_count) >= REGEN_THRESHOLD
+    except Exception as e:
+        logger.warning(f"Could not check regen status: {e}")
+        return False
+    finally:
+        db.close()
+
+
+async def analyze_preferences() -> str:
+    """Analyze all historical decisions and distill preference rules via Claude."""
+    db = SessionLocal()
+    try:
+        decided = (
+            db.query(Meme)
+            .filter(Meme.status.in_(["approved", "rejected", "saved"]))
+            .order_by(Meme.decided_at.desc())
+            .all()
+        )
+        if len(decided) < 5:
+            logger.info(f"Only {len(decided)} decisions — too few to analyze")
+            return ""
+
+        lines = []
+        for m in decided:
+            status_label = m.status.upper()
+            caption_preview = (m.caption or "")[:120]
+            notes = f' | Notes: "{m.user_notes}"' if m.user_notes else ""
+            lines.append(
+                f"[{status_label}] source={m.source}, caption=\"{caption_preview}\", "
+                f"ai_score={m.ai_score}, humor={m.ai_humor_score}, "
+                f"patch={m.ai_patch_score}, originality={m.ai_originality_score}, "
+                f"legal_flag={m.ai_legal_flag}{notes}"
+            )
+
+        decision_summary = "\n".join(lines)
+        total = len(decided)
+        approved = sum(1 for m in decided if m.status == "approved")
+        rejected = sum(1 for m in decided if m.status == "rejected")
+        saved = sum(1 for m in decided if m.status == "saved")
+
+        user_message = (
+            f"Total decisions: {total} (approved: {approved}, rejected: {rejected}, saved: {saved})\n\n"
+            f"DECISION HISTORY:\n{decision_summary}"
+        )
+
+        logger.info(f"Analyzing {total} decisions to distill preference rules...")
+
+        response = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=1024,
+            system=[{"type": "text", "text": PREFERENCE_ANALYSIS_PROMPT}],
+            messages=[{"role": "user", "content": user_message}],
+        )
+
+        rules_text = response.content[0].text.strip()
+        logger.info(f"Generated preference rules:\n{rules_text}")
+
+        # Save to DB
+        new_rules = PreferenceRules(
+            rules_text=rules_text,
+            decisions_analyzed=total,
+        )
+        db.add(new_rules)
+        db.commit()
+
+        logger.info(f"Saved new preference rules (analyzed {total} decisions)")
+        return rules_text
+
+    except Exception as e:
+        logger.error(f"Preference analysis failed: {e}", exc_info=True)
         return ""
     finally:
         db.close()
@@ -229,7 +367,14 @@ async def filter_batch(posts: list[dict]) -> list[dict]:
     """Filter a list of posts, returning only those that pass the threshold."""
     import asyncio
 
-    system_prompt = SYSTEM_PROMPT + _build_preference_examples()
+    # Use distilled rules if available, fall back to raw examples
+    rules = _get_preference_rules()
+    if rules:
+        system_prompt = SYSTEM_PROMPT + rules
+        logger.info("Using distilled preference rules for scoring")
+    else:
+        system_prompt = SYSTEM_PROMPT + _build_preference_examples()
+        logger.info("No distilled rules yet — using raw preference examples")
 
     sem = asyncio.Semaphore(5)
 

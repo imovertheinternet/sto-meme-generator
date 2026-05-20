@@ -13,8 +13,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-from db.database import init_db, get_db, Meme
+from db.database import init_db, get_db, Meme, PreferenceRules
 from pipeline import run_pipeline
+from ai.filter import analyze_preferences, _should_regenerate_rules
 
 IMAGES_DIR = Path("/data/images")
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -169,7 +170,39 @@ async def decide_meme(
 
     db.commit()
     db.refresh(meme)
+
+    # Auto-regenerate preference rules after enough new decisions
+    if _should_regenerate_rules():
+        logger.info("Decision threshold reached — regenerating preference rules in background")
+        asyncio.create_task(analyze_preferences())
+
     return meme
+
+
+@app.post("/preferences/analyze")
+async def trigger_preference_analysis():
+    """Manually trigger preference rule generation from approval history."""
+    rules = await analyze_preferences()
+    if not rules:
+        return {"message": "Not enough decisions to analyze (need at least 5)", "rules": None}
+    return {"message": "Preference rules regenerated", "rules": rules}
+
+
+@app.get("/preferences")
+def get_preferences(db: Session = Depends(get_db)):
+    """View the current distilled preference rules."""
+    latest = (
+        db.query(PreferenceRules)
+        .order_by(PreferenceRules.created_at.desc())
+        .first()
+    )
+    if not latest:
+        return {"rules": None, "decisions_analyzed": 0, "created_at": None}
+    return {
+        "rules": latest.rules_text,
+        "decisions_analyzed": latest.decisions_analyzed,
+        "created_at": latest.created_at.isoformat(),
+    }
 
 
 @app.post("/run", response_model=RunResponse)
