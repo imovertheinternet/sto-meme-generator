@@ -162,8 +162,22 @@ async def filter_meme(post: dict, system_prompt: str = None) -> dict:
         response = client.messages.create(
             model="claude-sonnet-4-6",
             max_tokens=512,
-            system=effective_prompt,
+            system=[
+                {
+                    "type": "text",
+                    "text": effective_prompt,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
             messages=[{"role": "user", "content": user_message_content}],
+        )
+
+        usage = response.usage
+        cache_created = getattr(usage, "cache_creation_input_tokens", 0)
+        cache_read = getattr(usage, "cache_read_input_tokens", 0)
+        logger.info(
+            f"Post {post['id']} tokens — input: {usage.input_tokens}, output: {usage.output_tokens}, "
+            f"cache_created: {cache_created}, cache_read: {cache_read}"
         )
 
         if not response.content:

@@ -26,6 +26,9 @@ services:
     volumes:
       - ./frontend/src:/app/src
       - ./frontend/index.html:/app/index.html
+      - ./frontend/vite.config.js:/app/vite.config.js
+      - ./frontend/package.json:/app/package.json
+      - ./frontend/components.json:/app/components.json
     ports:
       - "3000:3000"
     depends_on:
