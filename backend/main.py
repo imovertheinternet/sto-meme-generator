@@ -10,7 +10,7 @@ import json
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -322,6 +322,20 @@ def get_sources():
         "ai_model": "claude-sonnet-4-6",
         "score_threshold": float(os.getenv("AI_SCORE_THRESHOLD", 5.0)),
     }
+
+
+@app.get("/images/{filename}")
+def serve_image(filename: str):
+    """Serve a locally saved meme image."""
+    path = IMAGES_DIR / filename
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Image not found")
+    # Prevent path traversal
+    if not path.resolve().parent == IMAGES_DIR.resolve():
+        raise HTTPException(status_code=403, detail="Forbidden")
+    media_types = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
+    media_type = media_types.get(path.suffix.lower(), "image/jpeg")
+    return FileResponse(path, media_type=media_type)
 
 
 @app.get("/stats")
