@@ -6,7 +6,9 @@
       "Bash(python3 -m json.tool)",
       "Bash(curl -s -X POST http://localhost:8000/preferences/analyze)",
       "Bash(curl -s -X POST http://localhost:8000/run)",
-      "Bash(curl -s http://localhost:8000/pipeline/status)"
+      "Bash(curl -s http://localhost:8000/pipeline/status)",
+      "Bash(curl -s http://localhost:8000/sources)",
+      "Bash(curl -s http://localhost:8000/health)"
     ]
   }
 }

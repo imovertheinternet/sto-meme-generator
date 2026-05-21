@@ -21,6 +21,15 @@ export default defineConfig({
         target: 'http://backend:8000',
         rewrite: (path) => path.replace(/^\/api/, ''),
         changeOrigin: true,
+        // SSE support: disable response buffering so events stream through
+        configure: (proxy) => {
+          proxy.on('proxyRes', (proxyRes, req) => {
+            if (req.url?.includes('/pipeline/events')) {
+              proxyRes.headers['cache-control'] = 'no-cache'
+              proxyRes.headers['content-type'] = 'text/event-stream'
+            }
+          })
+        },
       }
     }
   }

@@ -214,6 +214,10 @@ async def trigger_pipeline():
     state = ps.get_state()
     if state["running"]:
         return {"message": "Pipeline is already running"}
+    # Set running state BEFORE creating task so SSE subscribers
+    # immediately see running=true (prevents race condition where
+    # SSE connects before the pipeline task starts and gets stale state)
+    ps.start_run()
     asyncio.create_task(run_pipeline())
     return {"message": "Pipeline started"}
 
@@ -273,6 +277,50 @@ async def test_pipeline(
         "source": source or "all",
         "results_count": len(scored) if scored else 0,
         "results": scored or [],
+    }
+
+
+@app.get("/sources")
+def get_sources():
+    """Active scraping sources and their configuration."""
+    ig_hashtags = [x.strip() for x in os.getenv("INSTAGRAM_HASHTAGS", "").split(",") if x.strip()]
+    tt_hashtags = [x.strip() for x in os.getenv("TIKTOK_HASHTAGS", "").split(",") if x.strip()]
+    reddit_subs = [x.strip() for x in os.getenv("REDDIT_SUBREDDITS", "").split(",") if x.strip()]
+    per_source = int(os.getenv("POSTS_PER_HASHTAG", 30))
+
+    sources = []
+    if ig_hashtags:
+        sources.append({
+            "name": "Instagram",
+            "icon": "📸",
+            "type": "apify",
+            "actor": "apify/instagram-hashtag-scraper",
+            "tags": ig_hashtags,
+            "posts_per_tag": per_source,
+        })
+    if tt_hashtags:
+        sources.append({
+            "name": "TikTok",
+            "icon": "🎵",
+            "type": "apify",
+            "actor": "clockworks/free-tiktok-scraper",
+            "tags": tt_hashtags,
+            "posts_per_tag": per_source,
+        })
+    if reddit_subs:
+        sources.append({
+            "name": "Reddit",
+            "icon": "🤖",
+            "type": "api",
+            "actor": "Reddit JSON API (no key required)",
+            "tags": reddit_subs,
+            "posts_per_tag": per_source,
+        })
+
+    return {
+        "sources": sources,
+        "ai_model": "claude-sonnet-4-6",
+        "score_threshold": float(os.getenv("AI_SCORE_THRESHOLD", 5.0)),
     }
 
 

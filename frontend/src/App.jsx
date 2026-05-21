@@ -5,6 +5,7 @@ import { QueueCard } from "@/components/QueueCard"
 import { DetailPanel } from "@/components/DetailPanel"
 import { HistoryPanel } from "@/components/HistoryPanel"
 import { PipelineProgress } from "@/components/PipelineProgress"
+import { SourcesPanel } from "@/components/SourcesPanel"
 
 export default function App() {
   const [view, setView] = useState("queue")
@@ -125,6 +126,7 @@ export default function App() {
       />
 
       <PipelineProgress pipeline={pipeline} />
+      <SourcesPanel />
 
       {view === "queue" ? (
         <div className="flex-1 flex overflow-hidden">

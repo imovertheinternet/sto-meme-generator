@@ -86,7 +86,10 @@ async def run_pipeline(
     init_db()
     db = SessionLocal()
 
-    ps.start_run()
+    # start_run() may already have been called by the /run endpoint
+    # to avoid SSE race conditions — only call if not already running
+    if not ps.get_state()["running"]:
+        ps.start_run()
     logger.info("=" * 60)
     logger.info("PIPELINE STARTED")
     logger.info("=" * 60)
@@ -189,7 +192,7 @@ async def run_pipeline(
     except Exception as e:
         ps.finish_run(error=str(e))
         logger.error(f"Pipeline error: {e}", exc_info=True)
-        if test_mode:
+        if limit is not None:
             raise
         return None
     finally:
