@@ -212,6 +212,26 @@ async def trigger_pipeline():
     return {"message": "Pipeline triggered — check back in a few minutes for new items in queue"}
 
 
+@app.post("/test")
+async def test_pipeline(
+    limit: int = Query(2, ge=1, le=20, description="Max posts to AI-filter"),
+    source: Optional[str] = Query(None, description="Limit to one source: instagram, tiktok, or reddit"),
+):
+    """Run the pipeline in test mode: scrape, filter a small batch, return results without persisting."""
+    valid_sources = {"instagram", "tiktok", "reddit"}
+    if source and source not in valid_sources:
+        raise HTTPException(status_code=400, detail=f"source must be one of {valid_sources}")
+
+    scored = await run_pipeline(limit=limit, source=source)
+    return {
+        "mode": "test",
+        "limit": limit,
+        "source": source or "all",
+        "results_count": len(scored) if scored else 0,
+        "results": scored or [],
+    }
+
+
 @app.get("/stats")
 def get_stats(db: Session = Depends(get_db)):
     """Dashboard counts."""

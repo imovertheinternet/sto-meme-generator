@@ -60,33 +60,49 @@ def _persist(db: Session, posts: list[dict]) -> int:
     return saved
 
 
-async def run_pipeline():
+async def run_pipeline(
+    limit: int | None = None,
+    source: str | None = None,
+) -> list[dict] | None:
     """
     Full daily pipeline:
     1. Scrape all sources
     2. Deduplicate against seen_ids
     3. AI filter
     4. Persist survivors to DB
+
+    When `limit` is set, run in **test mode**:
+    - Only AI-filter the first `limit` unseen posts
+    - Skip DB persistence
+    - Return the scored post dicts directly
+
+    When `source` is set, restrict scraping to that platform
+    ("instagram", "tiktok", or "reddit").
     """
     init_db()
     db = SessionLocal()
-    logger.info(f"Pipeline started at {datetime.utcnow().isoformat()}")
+    test_mode = limit is not None
+    logger.info(
+        f"Pipeline started at {datetime.utcnow().isoformat()}"
+        f"{' [TEST mode, limit=' + str(limit) + ']' if test_mode else ''}"
+        f"{' [source=' + source + ']' if source else ''}"
+    )
 
     try:
         ig_hashtags = _parse_list("INSTAGRAM_HASHTAGS")
         tt_hashtags = _parse_list("TIKTOK_HASHTAGS")
         reddit_subs = _parse_list("REDDIT_SUBREDDITS")
 
-        # --- Scrape ---
+        # --- Scrape (optionally filtered by source) ---
         raw_posts = []
 
-        if ig_hashtags:
+        if ig_hashtags and (source is None or source == "instagram"):
             raw_posts += scrape_instagram_hashtags(ig_hashtags)
 
-        if tt_hashtags:
+        if tt_hashtags and (source is None or source == "tiktok"):
             raw_posts += scrape_tiktok_hashtags(tt_hashtags)
 
-        if reddit_subs:
+        if reddit_subs and (source is None or source == "reddit"):
             raw_posts += scrape_reddit_subreddits(reddit_subs)
 
         logger.info(f"Total raw posts scraped: {len(raw_posts)}")
@@ -100,17 +116,27 @@ async def run_pipeline():
 
         if not unseen:
             logger.info("Nothing new to process.")
-            return
+            return [] if test_mode else None
 
         # --- AI Filter ---
-        survivors = await filter_batch(unseen)
-        logger.info(f"After AI filtering: {len(survivors)} posts passed threshold")
+        to_filter = unseen[:limit] if test_mode else unseen
+        logger.info(f"Sending {len(to_filter)} posts to AI filter")
+        scored = await filter_batch(to_filter)
+        logger.info(f"After AI filtering: {len(scored)} posts passed threshold")
 
-        # --- Persist ---
-        saved = _persist(db, survivors)
+        if test_mode:
+            logger.info(f"Test mode — returning {len(scored)} scored posts (not persisted)")
+            return scored
+
+        # --- Persist (production mode only) ---
+        saved = _persist(db, scored)
         logger.info(f"Pipeline complete. Saved {saved} new memes to review queue.")
+        return None
 
     except Exception as e:
         logger.error(f"Pipeline error: {e}", exc_info=True)
+        if test_mode:
+            raise
+        return None
     finally:
         db.close()
