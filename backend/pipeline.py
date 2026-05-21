@@ -71,7 +71,10 @@ def _persist(db: Session, posts: list[dict]) -> int:
     return saved
 
 
-async def run_pipeline():
+async def run_pipeline(
+    limit: int | None = None,
+    source: str | None = None,
+) -> list[dict] | None:
     """
     Full pipeline:
     Step 1/5: Scrape all sources (Instagram, TikTok, Reddit)
@@ -186,5 +189,8 @@ async def run_pipeline():
     except Exception as e:
         ps.finish_run(error=str(e))
         logger.error(f"Pipeline error: {e}", exc_info=True)
+        if test_mode:
+            raise
+        return None
     finally:
         db.close()
