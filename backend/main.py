@@ -6,9 +6,11 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
+import json
 import httpx
 from fastapi import FastAPI, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -16,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from db.database import init_db, get_db, Meme, PreferenceRules
 from pipeline import run_pipeline
 from ai.filter import analyze_preferences, _should_regenerate_rules
+import pipeline_state as ps
 
 IMAGES_DIR = Path("/data/images")
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
@@ -208,8 +211,49 @@ def get_preferences(db: Session = Depends(get_db)):
 @app.post("/run", response_model=RunResponse)
 async def trigger_pipeline():
     """Manually trigger the scrape + filter pipeline outside of schedule."""
+    state = ps.get_state()
+    if state["running"]:
+        return {"message": "Pipeline is already running"}
     asyncio.create_task(run_pipeline())
-    return {"message": "Pipeline triggered — check back in a few minutes for new items in queue"}
+    return {"message": "Pipeline started"}
+
+
+@app.get("/pipeline/status")
+def pipeline_status():
+    """Current pipeline state (poll-friendly)."""
+    return ps.get_state()
+
+
+@app.get("/pipeline/events")
+async def pipeline_events():
+    """SSE stream of pipeline progress events."""
+    queue = ps.subscribe()
+
+    async def event_stream():
+        try:
+            while True:
+                try:
+                    state = await asyncio.wait_for(queue.get(), timeout=30)
+                    yield f"data: {json.dumps(state)}\n\n"
+                    # Stop streaming after pipeline finishes
+                    if not state["running"] and state["finished_at"]:
+                        yield f"data: {json.dumps(state)}\n\n"
+                        break
+                except asyncio.TimeoutError:
+                    # Send keepalive
+                    yield ": keepalive\n\n"
+        finally:
+            ps.unsubscribe(queue)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/stats")

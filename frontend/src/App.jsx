@@ -1,9 +1,10 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { API } from "@/lib/helpers"
 import { Header } from "@/components/Header"
 import { QueueCard } from "@/components/QueueCard"
 import { DetailPanel } from "@/components/DetailPanel"
 import { HistoryPanel } from "@/components/HistoryPanel"
+import { PipelineProgress } from "@/components/PipelineProgress"
 
 export default function App() {
   const [view, setView] = useState("queue")
@@ -12,7 +13,8 @@ export default function App() {
   const [stats, setStats] = useState(null)
   const [loading, setLoading] = useState(false)
   const [deciding, setDeciding] = useState(false)
-  const [triggering, setTriggering] = useState(false)
+  const [pipeline, setPipeline] = useState(null)
+  const eventSourceRef = useRef(null)
 
   const loadQueue = useCallback(async () => {
     setLoading(true)
@@ -32,6 +34,57 @@ export default function App() {
   useEffect(() => {
     loadQueue()
   }, [loadQueue])
+
+  // Check pipeline status on mount (in case it's already running)
+  useEffect(() => {
+    fetch(`${API}/pipeline/status`)
+      .then((r) => r.json())
+      .then((state) => {
+        if (state.running) {
+          setPipeline(state)
+          connectSSE()
+        }
+      })
+      .catch(() => {})
+  }, [])
+
+  const connectSSE = useCallback(() => {
+    // Close existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close()
+    }
+
+    const es = new EventSource(`${API}/pipeline/events`)
+    eventSourceRef.current = es
+
+    es.onmessage = (event) => {
+      const state = JSON.parse(event.data)
+      setPipeline(state)
+
+      // Pipeline finished — refresh queue and close SSE
+      if (!state.running && state.finished_at) {
+        loadQueue()
+        es.close()
+        eventSourceRef.current = null
+        // Clear progress bar after a few seconds
+        setTimeout(() => setPipeline(null), 4000)
+      }
+    }
+
+    es.onerror = () => {
+      es.close()
+      eventSourceRef.current = null
+    }
+  }, [loadQueue])
+
+  // Cleanup SSE on unmount
+  useEffect(() => {
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close()
+      }
+    }
+  }, [])
 
   const handleDecide = async (id, status, notes) => {
     setDeciding(true)
@@ -53,13 +106,13 @@ export default function App() {
   }
 
   const handleTrigger = async () => {
-    setTriggering(true)
-    await fetch(`${API}/run`, { method: "POST" })
-    setTimeout(() => {
-      setTriggering(false)
-      loadQueue()
-    }, 3000)
+    const resp = await fetch(`${API}/run`, { method: "POST" })
+    const data = await resp.json()
+    if (data.message === "Pipeline is already running") return
+    connectSSE()
   }
+
+  const isRunning = pipeline?.running ?? false
 
   return (
     <div className="h-screen flex flex-col overflow-hidden">
@@ -68,8 +121,10 @@ export default function App() {
         view={view}
         setView={setView}
         onTrigger={handleTrigger}
-        triggering={triggering}
+        triggering={isRunning}
       />
+
+      <PipelineProgress pipeline={pipeline} />
 
       {view === "queue" ? (
         <div className="flex-1 flex overflow-hidden">

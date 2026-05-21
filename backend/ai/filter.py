@@ -255,6 +255,8 @@ async def filter_meme(post: dict, system_prompt: str = None) -> dict:
     user_message_content = []
 
     # Attempt to fetch and include image
+    MAX_IMAGE_BYTES = 4_500_000  # stay under Claude's 5MB limit
+
     try:
         async with httpx.AsyncClient(timeout=15) as http:
             resp = await http.get(image_url, follow_redirects=True)
@@ -264,9 +266,35 @@ async def filter_meme(post: dict, system_prompt: str = None) -> dict:
             if "image" not in content_type:
                 raise ValueError(f"Not an image: {content_type}")
 
+            image_bytes = resp.content
+
+            # Resize if image exceeds the API limit
+            if len(image_bytes) > MAX_IMAGE_BYTES:
+                logger.info(
+                    f"Image for {post['id']} is {len(image_bytes)/1e6:.1f}MB — resizing"
+                )
+                from io import BytesIO
+                from PIL import Image
+
+                img = Image.open(BytesIO(image_bytes))
+                # Scale down proportionally until it fits
+                quality = 85
+                for scale in [0.75, 0.5, 0.35, 0.25]:
+                    new_size = (int(img.width * scale), int(img.height * scale))
+                    resized = img.resize(new_size, Image.LANCZOS)
+                    buf = BytesIO()
+                    resized.save(buf, format="JPEG", quality=quality)
+                    image_bytes = buf.getvalue()
+                    if len(image_bytes) <= MAX_IMAGE_BYTES:
+                        break
+                content_type = "image/jpeg"
+                logger.info(
+                    f"Resized to {new_size[0]}x{new_size[1]} — {len(image_bytes)/1e6:.1f}MB"
+                )
+
             import base64
 
-            image_data = base64.standard_b64encode(resp.content).decode("utf-8")
+            image_data = base64.standard_b64encode(image_bytes).decode("utf-8")
             user_message_content.append(
                 {
                     "type": "image",
@@ -363,7 +391,7 @@ async def filter_meme(post: dict, system_prompt: str = None) -> dict:
         return None
 
 
-async def filter_batch(posts: list[dict]) -> list[dict]:
+async def filter_batch(posts: list[dict], progress_callback=None) -> list[dict]:
     """Filter a list of posts, returning only those that pass the threshold."""
     import asyncio
 
@@ -376,11 +404,21 @@ async def filter_batch(posts: list[dict]) -> list[dict]:
         system_prompt = SYSTEM_PROMPT + _build_preference_examples()
         logger.info("No distilled rules yet — using raw preference examples")
 
+    total = len(posts)
+    done_count = 0
+    lock = asyncio.Lock()
+
     sem = asyncio.Semaphore(5)
 
     async def guarded_filter(post):
+        nonlocal done_count
         async with sem:
-            return await filter_meme(post, system_prompt=system_prompt)
+            result = await filter_meme(post, system_prompt=system_prompt)
+            async with lock:
+                done_count += 1
+                if progress_callback:
+                    progress_callback(done_count, total)
+            return result
 
     tasks = [guarded_filter(p) for p in posts]
     results = await asyncio.gather(*tasks)
